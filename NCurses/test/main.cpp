@@ -16,7 +16,12 @@ int main() {
     initscr();             
     cbreak();                
     noecho();                
-    keypad(stdscr, TRUE);    
+    keypad(stdscr, TRUE);
+    curs_set(0); // Скрываем курсор
+    
+    // При старте программы или перед открытием меню:
+    idlok(stdscr, FALSE);
+    scrollok(stdscr, FALSE);    
 
     if (has_colors() == FALSE) {
         endwin();
@@ -44,27 +49,34 @@ int main() {
     const char *menu[] = {"1. Начать игру", "2. Настройки", "3. Данные из БД", "4. Выход"};
     int choice = 0;
     int key;
+    bool need_redraw = true; // 🌟 Флаг, управляющий отрисовкой
 
     while(1) {
-        clear();
-        attron(COLOR_PAIR(COLOR_MENU_BG));
-        mvprintw(1, 2, "Используйте стрелки/мышь для выбора и Enter/Клик:");
-        attroff(COLOR_PAIR(COLOR_MENU_BG));
+        if (need_redraw) {
+            // 🌟 ИСПРАВЛЕНИЕ: Заменили clear() на erase()
+            erase(); 
+ 
+            attron(COLOR_PAIR(COLOR_MENU_BG));
+            mvprintw(1, 2, "Используйте стрелки/мышь для выбора и Enter/Клик:");
+            attroff(COLOR_PAIR(COLOR_MENU_BG));
 
-        for(int i = 0; i < 4; i++) {
-            if(i == choice) {
-                attron(COLOR_PAIR(COLOR_MENU_ACTIVE) | A_BOLD);
-                mvprintw(3 + i, 4, "  %s  ", menu[i]);
-                attroff(COLOR_PAIR(COLOR_MENU_ACTIVE) | A_BOLD);
-            } else {
-                attron(COLOR_PAIR(COLOR_MENU_BG));
-                mvprintw(3 + i, 4, "  %s  ", menu[i]);
-                attroff(COLOR_PAIR(COLOR_MENU_BG));
+            for(int i = 0; i < 4; i++) {
+                if(i == choice) {
+                    attron(COLOR_PAIR(COLOR_MENU_ACTIVE) | A_BOLD);
+                    mvprintw(3 + i, 4, "  %s  ", menu[i]);
+                    attroff(COLOR_PAIR(COLOR_MENU_ACTIVE) | A_BOLD);
+                } else {
+                    attron(COLOR_PAIR(COLOR_MENU_BG));
+                    mvprintw(3 + i, 4, "  %s  ", menu[i]);
+                    attroff(COLOR_PAIR(COLOR_MENU_BG));
+                }
             }
+         
+            need_redraw=false;
         }
         
-        update_panels();
-        doupdate();
+//        update_panels();
+//        doupdate();
 
         key = getch();
         
@@ -90,6 +102,7 @@ int main() {
                             } else {
                                 // Если кликнули по другому пункту — просто переводим туда фокус подсветки
                                 choice = clicked_choice;
+                                need_redraw=true;
                                 continue;
                             }
                         }
@@ -98,16 +111,26 @@ int main() {
             }
         }        
         
-        if(key == KEY_UP && choice > 0) choice--;
-        if(key == KEY_DOWN && choice < 3) choice++;
+        // Клавиатурная навигация
+        if(key == KEY_UP && choice > 0) {
+            choice--;
+            need_redraw = true; // Сдвинули стрелку — надо перерисовать
+        }
+        if(key == KEY_DOWN && choice < 3) {
+            choice++;
+            need_redraw = true; // Сдвинули стрелку — надо перерисовать
+        }
         
         if(key == 10) { 
             if (choice == 0) {
                 show_game_popup(); 
+                need_redraw = true;
             } else if (choice == 1) {
                 show_settings(); // Теперь настройки красиво всплывают как модуль!
+                need_redraw = true;
             } else if (choice == 2) {
-                show_database_view(); // 🌟 Открываем список БД
+                show_database_view(); //🌟 Открываем список БД
+                need_redraw = true;
             } else if (choice == 3) {
                 break; 
             }
