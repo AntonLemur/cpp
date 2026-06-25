@@ -4,6 +4,8 @@
 #include "popup.hpp"
 #include "settings.hpp"
 #include "dataview.hpp"
+#include "db_manager.h"
+#include <iostream>
 
 #define COLOR_MENU_BG     1
 #define COLOR_MENU_ACTIVE 2
@@ -11,7 +13,13 @@
 #define COLOR_POPUP_TEXT  4
 
 int main() {
-    setlocale(LC_ALL, ""); 
+    setlocale(LC_ALL, "");
+    
+    // Инициализация базы данных ДО старта графики ncurses
+    if (!DBManager::connect()) {
+        std::cerr << "Критическая ошибка: Не удалось подключиться к базе данных Firebird!\n";
+        return 1;
+    }
 
     initscr();             
     cbreak();                
@@ -138,7 +146,11 @@ int main() {
     }
 
     del_panel(base_panel);
-    endwin(); 
+    endwin();
+    
+    // Закрытие соединения с базой данных
+    DBManager::disconnect();
+     
     return 0;
 }
 

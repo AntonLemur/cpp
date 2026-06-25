@@ -11,7 +11,7 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(NCURSES_ALL REQUIRED ncursesw panelw menuw formw)
 
 # Перечисляем все файлы исходного кода через пробел
-add_executable(test main.cpp popup.cpp settings.cpp dataview.cpp)
+add_executable(test main.cpp popup.cpp settings.cpp dataview.cpp db_manager.cpp employee_service.cpp photo_viewer.cpp)
 
 # Подключаем папки с заголовочными файлами (.h)
 target_include_directories(test PRIVATE ${NCURSES_ALL_INCLUDE_DIRS})
@@ -24,5 +24,7 @@ target_link_libraries(test PRIVATE
     menuw
     formw
     ncursesw
+    fbclient 
+    ncurses
 )
 
