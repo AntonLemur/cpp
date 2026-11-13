@@ -204,10 +204,12 @@ void show_database_view() {
                     swprintf(invisible_junk, 32, L"_%d_%d", item_idx, i);
 
                     // Включаем текущую цветовую пару окна (например, 4) ПЛЮС атрибут невидимости
-                    wattron(list_win, COLOR_PAIR(2) | A_INVIS); 
+//                    wattron(list_win, COLOR_PAIR(2) | A_INVIS); 
+                    wattron(list_win, COLOR_PAIR(5)); 
                     waddwstr(list_win, invisible_junk);
                     // Выключаем оба атрибута
-                    wattroff(list_win, COLOR_PAIR(2) | A_INVIS); 
+//                    wattroff(list_win, COLOR_PAIR(2) | A_INVIS); 
+                    wattroff(list_win, COLOR_PAIR(5)); 
                 } else {
                     // Обычная строка списка
                     swprintf(data_part, 128, L"  %-4d %-20lld %-20lld %-20ls %-3ls", 
@@ -221,9 +223,11 @@ void show_database_view() {
                     wchar_t invisible_junk[32];
                     swprintf(invisible_junk, 32, L"_%d_%d", item_idx, i);
 
-                    wattron(list_win, COLOR_PAIR(4) | A_INVIS); 
+//                    wattron(list_win, COLOR_PAIR(4) | A_INVIS); 
+                    wattron(list_win, COLOR_PAIR(5)); 
                     waddwstr(list_win, invisible_junk);
-                    wattroff(list_win, COLOR_PAIR(4) | A_INVIS); 
+//                    wattroff(list_win, COLOR_PAIR(4) | A_INVIS); 
+                    wattroff(list_win, COLOR_PAIR(5)); 
                 }
             }
 

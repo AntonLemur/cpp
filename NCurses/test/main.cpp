@@ -11,6 +11,7 @@
 #define COLOR_MENU_ACTIVE 2
 #define COLOR_POPUP_BOX   3
 #define COLOR_POPUP_TEXT  4
+#define COLOR_POPUP_TEXT_HIDE 5
 
 int main() {
     setlocale(LC_ALL, "");
@@ -42,6 +43,7 @@ int main() {
     init_pair(COLOR_MENU_ACTIVE, COLOR_BLACK,   COLOR_GREEN);  
     init_pair(COLOR_POPUP_BOX,   COLOR_RED,     COLOR_BLUE);   
     init_pair(COLOR_POPUP_TEXT,  COLOR_YELLOW,  COLOR_BLUE);
+    init_pair(COLOR_POPUP_TEXT_HIDE, COLOR_BLUE, COLOR_BLUE);
     
     // 🌟 1. АКТИВИРУЕМ МЫШЬ В NCURSES
     // Передаем маску событий: ALL_MOUSE_EVENTS включает отслеживание кликов.
