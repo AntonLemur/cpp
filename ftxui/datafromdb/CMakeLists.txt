@@ -17,6 +17,25 @@ FetchContent_Declare(
 
 FetchContent_MakeAvailable(ftxui)
 
+# Подключаем SDL2
+set(SDL2_DISABLE_INSTALL ON CACHE BOOL "" FORCE)
+FetchContent_Declare(SDL2
+  GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
+  GIT_TAG release-2.30.8
+  GIT_SHALLOW TRUE
+)
+
+# Подключаем SDL2_image (отключаем лишние внешние зависимости, оставляем встроенные декодеры)
+set(SDL2IMAGE_VENDORED OFF CACHE BOOL "" FORCE)
+set(SDL2IMAGE_SAMPLES OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(SDL2_image
+  GIT_REPOSITORY https://github.com/libsdl-org/SDL_image.git
+  GIT_TAG release-2.8.2
+  GIT_SHALLOW TRUE
+)
+
+FetchContent_MakeAvailable(ftxui SDL2 SDL2_image)
+
 add_executable(datafromdb main.cpp db_manager.h db_manager.cpp
   employee_service.h employee_service.cpp
   photo_renderer.h
@@ -34,8 +53,20 @@ target_link_libraries(datafromdb
   PRIVATE ftxui::screen
   PRIVATE ftxui::dom
   PRIVATE ftxui::component
+  PRIVATE SDL2::SDL2
+  PRIVATE SDL2_image::SDL2_image
   fbclient
 )
+
+# Для Windows: копируем собранные SDL2.dll и SDL2_image.dll рядом с .exe после сборки
+if(WIN32)
+  add_custom_command(TARGET datafromdb POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      $<TARGET_FILE:SDL2::SDL2>
+      $<TARGET_FILE:SDL2_image::SDL2_image>
+      $<TARGET_FILE_DIR:datafromdb>
+  )
+endif()
 
 include(GNUInstallDirs)
 install(TARGETS datafromdb

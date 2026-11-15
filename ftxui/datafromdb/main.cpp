@@ -124,7 +124,8 @@ int main() {
             if (current_details.hasPhoto && !current_details.photo.empty()) {
                 // FTXUI временно приостанавливает отрисовку и возвращает обычный режим терминала
                 screen.WithRestoredIO([&] {
-                    view_employee_photo_fullscreen(current_details);
+                    // view_employee_photo_fullscreen(current_details);
+                    view_employee_photo_from_memory(current_details);
                 })(); // <-- Эти скобки запускают обёрнутую функцию!
             }
             return true;
