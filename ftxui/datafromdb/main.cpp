@@ -122,11 +122,20 @@ int main() {
         if (event == Event::Character('f') || event == Event::Character('F') ||
             event == Event::Character("а") || event == Event::Character("А")) {
             if (current_details.hasPhoto && !current_details.photo.empty()) {
-                // FTXUI временно приостанавливает отрисовку и возвращает обычный режим терминала
-                screen.WithRestoredIO([&] {
-                    // view_employee_photo_fullscreen(current_details);
+#ifdef _WIN32
+                view_employee_photo_from_memory(current_details);
+#else
+                bool is_graphical_env = (std::getenv("DISPLAY") != nullptr || std::getenv("WAYLAND_DISPLAY") != nullptr);
+                if (is_graphical_env) {
                     view_employee_photo_from_memory(current_details);
-                })(); // <-- Эти скобки запускают обёрнутую функцию!
+                } else {
+                    // FTXUI временно приостанавливает отрисовку и возвращает обычный режим терминала
+                    screen.WithRestoredIO([&] {
+                        // view_employee_photo_fullscreen(current_details);
+                        view_employee_photo_from_memory(current_details);
+                    })(); // <-- Эти скобки запускают обёрнутую функцию!
+                }
+#endif
             }
             return true;
         }
@@ -166,6 +175,12 @@ int main() {
                 card_modal->Render(),
             });
         }
+
+#ifdef _WIN32
+        // Принудительно скрываем курсор при отрисовке каждого кадра
+        screen.SetCursor(Screen::Cursor{0, 0, Screen::Cursor::Hidden});
+#endif
+
         return document;
     });
 

@@ -43,10 +43,29 @@ add_executable(datafromdb main.cpp db_manager.h db_manager.cpp
   stb_image.h
   photo_viewer.h
   photo_viewer.cpp
-  README.md
 )
 
 target_include_directories(datafromdb PRIVATE ${stb_SOURCE_DIR})
+
+if(WIN32)
+  # Путь к распакованному архиву Firebird
+  set(FIREBIRD_DIR "C:/Users/user/Projects/Firebird-4.0.6.3221-0-x64")
+
+  target_include_directories(datafromdb PRIVATE "${FIREBIRD_DIR}/include")
+
+  # Ищем .lib (для MSVC) или .a (для MinGW)
+  find_library(FBCLIENT_LIB
+    NAMES fbclient_ms fbclient
+    PATHS "${FIREBIRD_DIR}/lib"
+    NO_DEFAULT_PATH
+    REQUIRED
+  )
+else()
+  # Для Linux
+  set(FBCLIENT_LIB fbclient)
+  find_package(X11 REQUIRED)
+  target_link_libraries(datafromdb PRIVATE X11::X11)
+endif()
 
 # Подключаем компоненты FTXUI (screen, dom, component)
 target_link_libraries(datafromdb
@@ -55,17 +74,38 @@ target_link_libraries(datafromdb
   PRIVATE ftxui::component
   PRIVATE SDL2::SDL2
   PRIVATE SDL2_image::SDL2_image
-  fbclient
+  PRIVATE ${FBCLIENT_LIB}
 )
 
-# Для Windows: копируем собранные SDL2.dll и SDL2_image.dll рядом с .exe после сборки
 if(WIN32)
+  # 1. Копируем DLL библиотек проекта (SDL2, FTXUI и Firebird)
   add_custom_command(TARGET datafromdb POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
       $<TARGET_FILE:SDL2::SDL2>
       $<TARGET_FILE:SDL2_image::SDL2_image>
+      $<TARGET_FILE:ftxui::screen>
+      $<TARGET_FILE:ftxui::dom>
+      $<TARGET_FILE:ftxui::component>
+      "${FIREBIRD_DIR}/fbclient.dll"
       $<TARGET_FILE_DIR:datafromdb>
+    COMMENT "Копирование библиотек проекта в папку сборки..."
   )
+
+  # 2. Если используется MinGW — находим и копируем системные DLL компилятора
+  if(MINGW)
+    # Вычисляем путь к папке bin компилятора из пути к g++.exe
+    get_filename_component(MINGW_BIN_DIR "${CMAKE_CXX_COMPILER}" DIRECTORY)
+
+    foreach(DLL_NAME libgcc_s_seh-1.dll libstdc++-6.dll libwinpthread-1.dll)
+      if(EXISTS "${MINGW_BIN_DIR}/${DLL_NAME}")
+        add_custom_command(TARGET datafromdb POST_BUILD
+          COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${MINGW_BIN_DIR}/${DLL_NAME}"
+            $<TARGET_FILE_DIR:datafromdb>
+        )
+      endif()
+    endforeach()
+  endif()
 endif()
 
 include(GNUInstallDirs)
