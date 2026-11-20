@@ -83,22 +83,108 @@ int main() {
     Employee current_details{};
     Element current_photo_element;
 
-    // 1. Компонент карточки (использует уже загруженные current_details и current_photo_element)
-    auto card_component = Renderer([&] {
-        std::string full_name = current_details.lastName + " " +
-                                current_details.firstName + " " +
-                                current_details.middleName;
+    // Буферные переменные для полей ввода
+    std::string edit_last_name;
+    std::string edit_first_name;
+    std::string edit_middle_name;
+    std::string status_message;
 
+    // 1. Создаём поля ввода FTXUI
+    InputOption input_opt;
+    input_opt.multiline = false; // Запрещаем перенос строки по Enter
+    // input_opt.transform = [](InputState state) {
+    //     // Текст внутри поля делаем контрастным
+    //     state.element |= color(Color::Black);
+
+    //     if (state.focused) {
+    //         // Активное поле (в фокусе): светло-голубой/серый фон и чёткая рамка
+    //         state.element |= bgcolor(Color::RGB(220, 235, 255));
+    //     } else {
+    //         // Неактивное поле: светло-серый фон, чтобы границы поля всегда были видны на белом фоне
+    //         state.element |= bgcolor(Color::RGB(240, 240, 240));
+    //     }
+    //     return state.element;
+    // };
+
+    auto input_last_name  = Input(&edit_last_name, "Введите фамилию", input_opt);
+    auto input_first_name = Input(&edit_first_name, "Введите имя", input_opt);
+    auto input_middle_name = Input(&edit_middle_name, "Введите отчество", input_opt);
+
+    // 2. Кнопки действий
+    ButtonOption btn_opt;
+    btn_opt.transform = [](const EntryState& s) {
+        auto element = text(s.label);
+        if (s.focused) {
+            element = element | inverted | bold;
+        }
+        return element;
+    };
+
+    auto btn_save = Button(" [ Сохранить ] ", [&] {
+        // Распаковка полей (фича C++17)
+        auto [ok, error] = update_employee_name(current_details.id, edit_last_name, edit_first_name, edit_middle_name);
+        if (ok) {
+            // Обновляем данные в открытой карточке и в списке таблицы на экране
+            current_details.lastName = edit_last_name;
+            current_details.firstName = edit_first_name;
+            current_details.middleName = edit_middle_name;
+
+            employees[selected].lastName = edit_last_name;
+            employees[selected].firstName = edit_first_name;
+            employees[selected].middleName = edit_middle_name;
+
+            show_card = false;
+            current_details.photo.clear();
+        } else {
+            status_message = error;
+        }
+    },btn_opt);
+
+    auto btn_cancel = Button(" [ Отмена ] ", [&] {
+        show_card = false;
+        current_details.photo.clear();
+    },btn_opt);
+
+    // Объединяем все интерактивные элементы карточки для навигации стрелками/Tab
+    auto card_form_container = Container::Vertical({
+        input_last_name,
+        input_first_name,
+        input_middle_name,
+        btn_save,
+        btn_cancel,
+    });
+
+    // 3. Отрисовка самой карточки
+    auto card_component = Renderer(card_form_container, [&] {
         auto info_block = vbox({
                                 hbox({text(" ID:           ") | dim, text(std::to_string(current_details.id)) | bold}),
                                 hbox({text(" Таб. номер:   ") | dim, text(std::to_string(current_details.sn))}),
                                 hbox({text(" Внутр. код:   ") | dim, text(std::to_string(current_details.si))}),
-                                hbox({text(" ФИО:          ") | dim, text(full_name)}),
+                                separator(),
+                                hbox({
+                                  text(" Фамилия:      ") | dim,
+                                  input_last_name->Render() | (input_last_name->Focused() ? bgcolor(Color::Blue) | color(Color::White) :
+                                                                   bgcolor(Color::GrayLight) | color(Color::Black)) | flex,
+                                }),
+                                hbox({
+                                  text(" Имя:          ") | dim,
+                                  input_first_name->Render() | (input_first_name->Focused() ? bgcolor(Color::Blue) | color(Color::White) :
+                                                                   bgcolor(Color::GrayLight) | color(Color::Black)) | flex,
+                                }),
+                                hbox({
+                                  text(" Отчество:     ") | dim,
+                                  input_middle_name->Render() | (input_middle_name->Focused() ? bgcolor(Color::Blue) | color(Color::White) :
+                                                                   bgcolor(Color::GrayLight) | color(Color::Black)) | flex,
+                                }),
+                                separator(),
                                 hbox({text(" Наличие фото: ") | dim, text(current_details.hasPhoto ? "Есть в базе" : "Отсутствует")}),
+                                filler(),
+                                status_message.empty() ? text("") : text(status_message) | color(Color::Red),
+                                hbox({btn_save->Render(), text("  "), btn_cancel->Render()}) | center,
                                 }) | flex;
 
         return vbox({
-                   text(" Карточка сотрудника ") | bold | center,
+                   text(" Карточка сотрудника (редактирование) ") | bold | center,
                    separator(),
                    hbox({
                        current_photo_element,
@@ -107,8 +193,8 @@ int main() {
                    }),
                    separator(),
                    text(current_details.hasPhoto
-                            ? " Полное фото: 'f' | Закрыть: Esc или Enter "
-                            : " Нажмите Esc или Enter, чтобы закрыть ") | dim | center,
+                            ? " Переход: Tab/Стрелки | Полное фото: F2 | Закрыть: Esc "
+                            : " Переход: Tab/Стрелки | Закрыть: Esc ") | dim | center,
                }) |
                borderDouble |
                size(WIDTH, GREATER_THAN, 98) |
@@ -119,8 +205,7 @@ int main() {
     // 2. Перехват клавиш в открытой карточке
     auto card_modal = CatchEvent(card_component, [&](Event event) {
         // Открытие фото в полном разрешении по клавише 'f' (или русской 'а')
-        if (event == Event::Character('f') || event == Event::Character('F') ||
-            event == Event::Character("а") || event == Event::Character("А")) {
+        if (event == Event::F2) {
             if (current_details.hasPhoto && !current_details.photo.empty()) {
 #ifdef _WIN32
                 view_employee_photo_from_memory(current_details);
@@ -140,12 +225,34 @@ int main() {
             return true;
         }
 
-        if (event == Event::Escape || event == Event::Return || event == Event::Character('q')) {
+        if (event == Event::Escape) {
             show_card = false;
             current_details.photo.clear();
             return true;
         }
-        return true;
+
+        // Стрелки Вверх/Вниз и обратная табуляция (включая код \033[Z в Linux-терминалах)
+        if (event == Event::ArrowDown || event == Event::Tab) {
+            card_form_container->OnEvent(Event::Tab);
+            return true;
+        }
+        if (event == Event::ArrowUp || event == Event::TabReverse || event == Event::Special("\033[Z")) {
+            card_form_container->OnEvent(Event::TabReverse);
+            return true;
+        }
+
+        if (event == Event::ArrowRight && btn_save->Focused()) {
+            btn_cancel->TakeFocus();
+            return true;
+        }
+        if (event == Event::ArrowLeft && btn_cancel->Focused()) {
+            btn_save->TakeFocus();
+            return true;
+        }
+
+        // Все остальные клавиши передаём напрямую в контейнер формы
+        card_form_container->OnEvent(event);
+        return true; // Всегда поглощаем любые события, пока открыта карточка!
     });
 
     // 3. Обработка нажатия Enter в таблице: запрашиваем БД и строим картинку один раз
@@ -155,6 +262,13 @@ int main() {
             current_details = get_employee_details(employees[selected].id);
             // Превращаем байты JPEG в холст FTXUI
             current_photo_element = render_employee_photo(current_details.photo);
+
+            edit_last_name = current_details.lastName;
+            edit_first_name = current_details.firstName;
+            edit_middle_name = current_details.middleName;
+            status_message.clear();
+            input_last_name->TakeFocus();
+
             show_card = true;
             return true;
         }

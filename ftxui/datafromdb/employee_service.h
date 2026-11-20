@@ -5,6 +5,11 @@
 #include <vector>
 #include <cstdint>
 
+struct Result{
+    bool isOk = false;
+    std::string last_db_error;
+};
+
 // Единая структура сотрудника для всего приложения
 struct Employee {
     int id;
@@ -22,6 +27,12 @@ std::vector<Employee> get_employees_list();
 
 // Возвращает одного "полного" сотрудника по его ID (включая загрузку тяжелого BLOB фото)
 Employee get_employee_details(int employee_id);
+
+Result update_employee_name(
+    int id,
+    const std::string& last_name,
+    const std::string& first_name,
+    const std::string& middle_name);
 
 #endif // EMPLOYEE_SERVICE_H
 

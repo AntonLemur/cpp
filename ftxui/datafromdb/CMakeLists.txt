@@ -43,6 +43,7 @@ add_executable(datafromdb main.cpp db_manager.h db_manager.cpp
   stb_image.h
   photo_viewer.h
   photo_viewer.cpp
+  db_utils.h
 )
 
 target_include_directories(datafromdb PRIVATE ${stb_SOURCE_DIR})

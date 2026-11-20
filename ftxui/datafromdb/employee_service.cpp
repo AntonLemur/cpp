@@ -6,6 +6,8 @@
 #include <iostream>
 #include <ncursesw/ncurses.h>
 #include <ncursesw/panel.h>
+#include <cstring>
+#include "db_utils.h"
 
 // Внутренняя вспомогательная функция для конвертации строк
 static std::wstring utf8_to_wstring(const std::string& str) {
@@ -213,3 +215,90 @@ Employee get_employee_details(int employee_id) {
     return emp;
 }
 
+Result update_employee_name(
+    int id,
+    const std::string& last_name,
+    const std::string& first_name,
+    const std::string& middle_name) {
+    auto attachment = DBManager::getAttachment();
+    auto master = DBManager::getMaster();
+
+    if (!attachment || !master) return {false, "No connect"};
+
+    // Firebird::ThrowStatusWrapper status(master->getStatus());
+    // Firebird::ITransaction* tra = nullptr;
+    // Firebird::IStatement* stmt = nullptr;
+    // Firebird::IMessageMetadata* meta = nullptr;
+    FbStatus status(master);
+
+    try {
+        // tra = attachment->startTransaction(&status, 0, nullptr);
+        // Транзакция сама сделает rollback и release, если вылетит исключение до commit()
+        FbTransactionGuard tra(attachment->startTransaction(status.get(), 0, nullptr), master);
+
+        const char* sql =
+            "UPDATE EMPLOYEES "
+            "SET LAST_NAME = ?, FIRST_NAME = ?, MIDDLE_NAME = ? "
+            "WHERE ID = ?";
+
+        // stmt = attachment->prepare(&status, tra, 0, sql, 3, Firebird::IStatement::PREPARE_PREFETCH_METADATA);
+        // meta = stmt->getInputMetadata(&status);
+
+        // stmt и meta сами вызовут release() при выходе из блока try (даже при ошибке)
+        FbPtr<Firebird::IStatement> stmt(
+            attachment->prepare(status.get(), tra.get(), 0, sql, 3, Firebird::IStatement::PREPARE_PREFETCH_METADATA)
+            );
+        FbPtr<Firebird::IMessageMetadata> meta(stmt->getInputMetadata(status.get()));
+
+        unsigned msgLen = meta->getMessageLength(status.get());
+        std::vector<unsigned char> buffer(msgLen, 0);
+
+        // Вспомогательная лямбда для записи VARCHAR-параметра в буфер Firebird
+        auto set_varchar = [&](unsigned index, const std::string& val) {
+            unsigned offset = meta->getOffset(status.get(), index);
+            unsigned nullOffset = meta->getNullOffset(status.get(), index);
+            unsigned fieldLen = meta->getLength(status.get(), index);
+
+            *reinterpret_cast<short*>(buffer.data() + nullOffset) = 0; // NOT NULL
+            short copyLen = static_cast<short>(std::min<size_t>(val.size(), fieldLen));
+            *reinterpret_cast<short*>(buffer.data() + offset) = copyLen;
+            std::memcpy(buffer.data() + offset + 2, val.data(), copyLen);
+        };
+
+        set_varchar(0, last_name);
+        set_varchar(1, first_name);
+        set_varchar(2, middle_name);
+
+        // Записываем целочисленный ID (индекс 3)
+        unsigned idOffset = meta->getOffset(status.get(), 3);
+        unsigned idNullOffset = meta->getNullOffset(status.get(), 3);
+        *reinterpret_cast<short*>(buffer.data() + idNullOffset) = 0;
+        *reinterpret_cast<int*>(buffer.data() + idOffset) = id;
+
+        // stmt->execute(&status, tra, meta, buffer.data(), nullptr, nullptr);
+        stmt->execute(status.get(), tra.get(), meta.get(), buffer.data(), nullptr, nullptr);
+        tra.commit(status.get());
+
+        // meta->release();
+        // stmt->release();
+        // tra->release();
+        return {true,"Ok"};
+
+    } catch (const Firebird::FbException& e) {
+        // Извлекаем человекочитаемое сообщение об ошибке из статуса Firebird
+        char err_buf[512];
+        master->getUtilInterface()->formatStatus(err_buf, sizeof(err_buf), e.getStatus());
+
+        // if (tra) {
+        //     try {
+        //         Firebird::ThrowStatusWrapper rollbackStatus(master->getStatus());
+        //         tra->rollback(&rollbackStatus);
+        //     } catch (...) {}
+        //     tra->release();
+        // }
+        // if (meta) meta->release();
+        // if (stmt) stmt->release();
+
+        return {false,err_buf};
+    }
+}
