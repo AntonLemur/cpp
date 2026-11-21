@@ -302,3 +302,60 @@ Result update_employee_name(
         return {false,err_buf};
     }
 }
+
+Result update_employee_photo(int id, const std::vector<uint8_t>& photo_bytes) {
+    auto attachment = DBManager::getAttachment();
+    auto status_raw = DBManager::getStatus();
+    auto master = DBManager::getMaster();
+
+    if (!attachment || !status_raw || !master) return {false, "No connect"};
+
+    Firebird::ThrowStatusWrapper status(status_raw);
+
+    try {
+        FbTransactionGuard tra(attachment->startTransaction(&status, 0, nullptr), master);
+
+        // 1. Создаём новый BLOB и записываем в него байты изображения
+        ISC_QUAD blob_id{};
+        FbPtr<Firebird::IBlob> blob(
+            attachment->createBlob(&status, tra.get(), &blob_id, 0, nullptr));
+
+        size_t offset = 0;
+        const size_t max_chunk = 32767;
+        while (offset < photo_bytes.size()) {
+            unsigned int chunk = static_cast<unsigned int>(
+                std::min(max_chunk, photo_bytes.size() - offset));
+            blob->putSegment(&status, chunk, photo_bytes.data() + offset);
+            offset += chunk;
+        }
+        blob->close(&status);
+        blob.release(); // close() уже освобождает интерфейс IBlob в Firebird OO API
+
+        // 2. Привязываем созданный blob_id к записи сотрудника
+        const char* sql = "UPDATE EMPLOYEES SET PHOTO = ? WHERE ID = ?";
+        FbPtr<Firebird::IStatement> stmt(
+            attachment->prepare(&status, tra.get(), 0, sql, 3, Firebird::IStatement::PREPARE_PREFETCH_METADATA));
+        FbPtr<Firebird::IMessageMetadata> meta(stmt->getInputMetadata(&status));
+
+        std::vector<unsigned char> buffer(meta->getMessageLength(&status), 0);
+
+        unsigned blobOff = meta->getOffset(&status, 0);
+        unsigned blobNullOff = meta->getNullOffset(&status, 0);
+        *reinterpret_cast<short*>(buffer.data() + blobNullOff) = 0;
+        *reinterpret_cast<ISC_QUAD*>(buffer.data() + blobOff) = blob_id;
+
+        unsigned idOff = meta->getOffset(&status, 1);
+        unsigned idNullOff = meta->getNullOffset(&status, 1);
+        *reinterpret_cast<short*>(buffer.data() + idNullOff) = 0;
+        *reinterpret_cast<int*>(buffer.data() + idOff) = id;
+
+        stmt->execute(&status, tra.get(), meta.get(), buffer.data(), nullptr, nullptr);
+        tra.commit(&status);
+
+        return {true, "Ok"};
+    } catch (const Firebird::FbException& e) {
+        char err_buf[512] = {0};
+        master->getUtilInterface()->formatStatus(err_buf, sizeof(err_buf), e.getStatus());
+        return {false, err_buf};
+    }
+}

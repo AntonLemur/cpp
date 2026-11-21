@@ -34,5 +34,7 @@ Result update_employee_name(
     const std::string& first_name,
     const std::string& middle_name);
 
+Result update_employee_photo(int id, const std::vector<uint8_t>& photo_bytes);
+
 #endif // EMPLOYEE_SERVICE_H
 

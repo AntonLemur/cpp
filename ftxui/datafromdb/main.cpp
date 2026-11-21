@@ -9,6 +9,46 @@
 #include "employee_service.h"
 #include "photo_renderer.h"
 #include "photo_viewer.h"
+#include "file_picker.h"
+
+#include <algorithm>
+#include <cctype>
+#include <fstream>
+
+// Приводит строку UTF-8 (латиницу и кириллицу) к нижнему регистру для поиска
+std::string to_lower_utf8(const std::string& s) {
+    std::string res;
+    res.reserve(s.size());
+    for (size_t i = 0; i < s.size(); ++i) {
+        unsigned char c = static_cast<unsigned char>(s[i]);
+        // 1. Обычная латиница A-Z
+        if (c >= 'A' && c <= 'Z') {
+            res.push_back(static_cast<char>(c + 32));
+        }
+        // 2. Кириллица в UTF-8 (двухбайтовые последовательности)
+        else if (c == 0xD0 && i + 1 < s.size()) {
+            unsigned char c2 = static_cast<unsigned char>(s[i + 1]);
+            if (c2 >= 0x90 && c2 <= 0x9F) { // А-П -> а-п
+                res.push_back(static_cast<char>(0xD0));
+                res.push_back(static_cast<char>(c2 + 0x20));
+                ++i;
+            } else if (c2 >= 0xA0 && c2 <= 0xAF) { // Р-Я -> р-я
+                res.push_back(static_cast<char>(0xD1));
+                res.push_back(static_cast<char>(c2 - 0x20));
+                ++i;
+            } else if (c2 == 0x81) { // Ё -> ё
+                res.push_back(static_cast<char>(0xD1));
+                res.push_back(static_cast<char>(0x91));
+                ++i;
+            } else {
+                res.push_back(s[i]);
+            }
+        } else {
+            res.push_back(s[i]);
+        }
+    }
+    return res;
+}
 
 int main() {
     using namespace ftxui;
@@ -20,37 +60,92 @@ int main() {
     std::vector<Employee> employees = get_employees_list();
 
     int selected = 0;
+    std::string search_query;
+    std::string last_search_query; // Запоминаем последнее состояние строки поиска
+    std::vector<size_t> filtered_indices;
+    bool show_file_picker = false;
+    bool photo_changed = false;
+
     auto rows_container = Container::Vertical({}, &selected);
 
-    // 2. Формируем строки таблицы из вектора
-    for (size_t i = 0; i < employees.size(); ++i) {
-        auto row = Renderer([&, i](bool focused) {
+    // Функция пересборки видимых строк при изменении строки поиска
+    auto rebuild_table = [&] {
+        rows_container->DetachAllChildren();
+        filtered_indices.clear();
+        selected = 0;
+
+        std::string q_lower = to_lower_utf8(search_query);
+
+        for (size_t i = 0; i < employees.size(); ++i) {
             const auto& emp = employees[i];
-
-            // Собираем ФИО (если поля в std::string UTF-8)
             std::string full_name = emp.lastName + " " + emp.firstName + " " + emp.middleName;
+            std::string sn_str = std::to_string(emp.sn);
 
-            auto line = hbox({
-                text(std::to_string(emp.id)) | size(WIDTH, EQUAL, 6),
-                separator(),
-                text(std::to_string(emp.sn)) | size(WIDTH, EQUAL, 14),
-                separator(),
-                text(full_name) | flex,
-                separator(),
-                text(emp.hasPhoto ? " [Да] " : " [Нет] ") | size(WIDTH, EQUAL, 8),
-            });
+            // Проверяем совпадение по ФИО (без учёта регистра) или по табельному номеру
+            bool match = q_lower.empty() ||
+                         (to_lower_utf8(full_name).find(q_lower) != std::string::npos) ||
+                         (sn_str.find(q_lower) != std::string::npos);
 
-            if (focused) {
-                line = line | inverted | focus;
+            if (match) {
+                filtered_indices.push_back(i);
+
+                auto row = Renderer([&, i](bool focused) {
+                    const auto& item = employees[i];
+                    std::string item_name = item.lastName + " " + item.firstName + " " + item.middleName;
+
+                    auto line = hbox({
+                        text(std::to_string(item.id)) | size(WIDTH, EQUAL, 6),
+                        separator(),
+                        text(std::to_string(item.sn)) | size(WIDTH, EQUAL, 14),
+                        separator(),
+                        text(item_name) | flex,
+                        separator(),
+                        text(item.hasPhoto ? " [Да] " : " [Нет] ") | size(WIDTH, EQUAL, 8),
+                    });
+
+                    if (focused) {
+                        line = line | inverted | focus;
+                    }
+                    return line;
+                });
+
+                rows_container->Add(row);
             }
-            return line;
-        });
+        }
+    };
 
-        rows_container->Add(row);
-    }
+    // Первоначальное заполнение таблицы всеми записями
+    rebuild_table();
+
+    // Поле живого поиска
+    InputOption search_opt;
+    search_opt.multiline = false;
+    // search_opt.on_change = rebuild_table; // Вызывается автоматически при каждой введённой букве!
+    search_opt.transform = [](InputState state) {
+        if (state.focused) {
+            state.element |= bgcolor(Color::Blue) | color(Color::White);
+        } else {
+            state.element |= bgcolor(Color::GrayLight) | color(Color::Black);
+        }
+        return state.element;
+    };
+
+    auto search_input = Input(&search_query, "Введите фамилию или таб. номер...", search_opt);
+
+    // Объединяем строку поиска и таблицу в единый вертикальный контейнер фокуса
+    auto main_area_container = Container::Vertical({
+        search_input,
+        rows_container,
+    });
 
     // 3. Оборачиваем грид в общий макет с шапкой и подвалом
-    auto layout = Renderer(rows_container, [&] {
+    auto layout = Renderer(main_area_container, [&] {
+        // Если строка поиска изменилась (любым способом: ввод, Backspace, Delete) — пересобираем таблицу
+        if (search_query != last_search_query) {
+            last_search_query = search_query;
+            rebuild_table();
+        }
+
         auto header = hbox({
             text("ID") | bold | size(WIDTH, EQUAL, 6),
             separator(),
@@ -61,18 +156,26 @@ int main() {
             text("Фото") | bold | size(WIDTH, EQUAL, 8),
         });
 
-        Element body = employees.empty()
-                           ? text("Записи не найдены") | center | flex
+        Element body = filtered_indices.empty()
+                           ? text("Совпадений не найдено") | dim | center | flex
                            : rows_container->Render() | yframe | flex;
 
         return vbox({
                    text("Справочник сотрудников (Firebird)") | bold | center,
                    separator(),
+                   hbox({
+                       text(" Поиск: ") | bold,
+                       search_input->Render() | flex,
+                       search_query.empty() ? text("") : text(" [Esc — очистить] ") | dim,
+                   }),
+                   separator(),
                    header,
                    separator(),
                    body,
                    separator(),
-                   text("Всего записей: " + std::to_string(employees.size()) + " | Карточка: Enter | Выход: 'q'") | dim,
+                   text("Найдено: " + std::to_string(filtered_indices.size()) +
+                        " из " + std::to_string(employees.size()) +
+                        " | Поиск: '/' | Карточка: Enter | Выход: 'q'") | dim,
                }) |
                border;
     });
@@ -92,19 +195,14 @@ int main() {
     // 1. Создаём поля ввода FTXUI
     InputOption input_opt;
     input_opt.multiline = false; // Запрещаем перенос строки по Enter
-    // input_opt.transform = [](InputState state) {
-    //     // Текст внутри поля делаем контрастным
-    //     state.element |= color(Color::Black);
-
-    //     if (state.focused) {
-    //         // Активное поле (в фокусе): светло-голубой/серый фон и чёткая рамка
-    //         state.element |= bgcolor(Color::RGB(220, 235, 255));
-    //     } else {
-    //         // Неактивное поле: светло-серый фон, чтобы границы поля всегда были видны на белом фоне
-    //         state.element |= bgcolor(Color::RGB(240, 240, 240));
-    //     }
-    //     return state.element;
-    // };
+    input_opt.transform = [](InputState state) {
+        if (state.focused) {
+            state.element |= bgcolor(Color::Blue) | color(Color::White);
+        } else {
+            state.element |= bgcolor(Color::GrayLight) | color(Color::Black);
+        }
+        return state.element;
+    };
 
     auto input_last_name  = Input(&edit_last_name, "Введите фамилию", input_opt);
     auto input_first_name = Input(&edit_first_name, "Введите имя", input_opt);
@@ -129,10 +227,15 @@ int main() {
             current_details.firstName = edit_first_name;
             current_details.middleName = edit_middle_name;
 
-            employees[selected].lastName = edit_last_name;
-            employees[selected].firstName = edit_first_name;
-            employees[selected].middleName = edit_middle_name;
-
+            size_t real_idx = filtered_indices[selected];
+            employees[real_idx].lastName = edit_last_name;
+            employees[real_idx].firstName = edit_first_name;
+            employees[real_idx].middleName = edit_middle_name;
+            if (photo_changed)
+            {
+                update_employee_photo(current_details.id, current_details.photo);
+                employees[real_idx].hasPhoto = current_details.hasPhoto;
+            }
             show_card = false;
             current_details.photo.clear();
         } else {
@@ -145,6 +248,8 @@ int main() {
         current_details.photo.clear();
     },btn_opt);
 
+    auto btn_change_photo = Button(" [ Изменить фото ] ", [&] { show_file_picker = true; }, btn_opt);
+
     // Объединяем все интерактивные элементы карточки для навигации стрелками/Tab
     auto card_form_container = Container::Vertical({
         input_last_name,
@@ -152,6 +257,7 @@ int main() {
         input_middle_name,
         btn_save,
         btn_cancel,
+        btn_change_photo,
     });
 
     // 3. Отрисовка самой карточки
@@ -161,26 +267,14 @@ int main() {
                                 hbox({text(" Таб. номер:   ") | dim, text(std::to_string(current_details.sn))}),
                                 hbox({text(" Внутр. код:   ") | dim, text(std::to_string(current_details.si))}),
                                 separator(),
-                                hbox({
-                                  text(" Фамилия:      ") | dim,
-                                  input_last_name->Render() | (input_last_name->Focused() ? bgcolor(Color::Blue) | color(Color::White) :
-                                                                   bgcolor(Color::GrayLight) | color(Color::Black)) | flex,
-                                }),
-                                hbox({
-                                  text(" Имя:          ") | dim,
-                                  input_first_name->Render() | (input_first_name->Focused() ? bgcolor(Color::Blue) | color(Color::White) :
-                                                                   bgcolor(Color::GrayLight) | color(Color::Black)) | flex,
-                                }),
-                                hbox({
-                                  text(" Отчество:     ") | dim,
-                                  input_middle_name->Render() | (input_middle_name->Focused() ? bgcolor(Color::Blue) | color(Color::White) :
-                                                                   bgcolor(Color::GrayLight) | color(Color::Black)) | flex,
-                                }),
+                                hbox({text(" Фамилия:      ") | dim, input_last_name->Render() | flex}),
+                                hbox({text(" Имя:          ") | dim, input_first_name->Render() | flex}),
+                                hbox({text(" Отчество:     ") | dim, input_middle_name->Render() | flex}),
                                 separator(),
                                 hbox({text(" Наличие фото: ") | dim, text(current_details.hasPhoto ? "Есть в базе" : "Отсутствует")}),
                                 filler(),
                                 status_message.empty() ? text("") : text(status_message) | color(Color::Red),
-                                hbox({btn_save->Render(), text("  "), btn_cancel->Render()}) | center,
+                                hbox({btn_save->Render(), text("  "), btn_cancel->Render(), text("  "), btn_change_photo->Render()}) | center,
                                 }) | flex;
 
         return vbox({
@@ -255,11 +349,56 @@ int main() {
         return true; // Всегда поглощаем любые события, пока открыта карточка!
     });
 
+    // Окно выбора фото
+    auto file_picker_modal = CreateImageFilePicker(
+        [&](const std::string& chosen_path) {
+            std::ifstream f(chosen_path, std::ios::binary | std::ios::ate);
+            if (f.is_open()) {
+                auto sz = f.tellg();
+                f.seekg(0, std::ios::beg);
+                current_details.photo.resize(static_cast<size_t>(sz));
+                f.read(reinterpret_cast<char*>(current_details.photo.data()), sz);
+                current_details.hasPhoto = !current_details.photo.empty();
+                current_photo_element = render_employee_photo(current_details.photo);
+                photo_changed = true;
+            }
+            show_file_picker = false;
+        },
+        [&] { show_file_picker = false; }
+    );
+
     // 3. Обработка нажатия Enter в таблице: запрашиваем БД и строим картинку один раз
     auto table_with_events = CatchEvent(layout, [&](Event event) {
-        if (event == Event::Return && !employees.empty()) {
+        // Если фокус сейчас в строке поиска:
+        if (search_input->Focused()) {
+            if (event == Event::Escape) {
+                if (!search_query.empty()) {
+                    search_query.clear();
+                    rebuild_table();
+                } else {
+                    rows_container->TakeFocus(); // Если строка пуста, Esc переводит фокус в таблицу
+                }
+                return true;
+            }
+            // Нажатие Enter или стрелки Вниз переводит фокус из поиска на первую найденную строку
+            if ((event == Event::Return || event == Event::ArrowDown) && !filtered_indices.empty()) {
+                rows_container->TakeFocus();
+                return true;
+            }
+            // Все остальные клавиши (включая 'q' и 'й') печатаются в строку поиска!
+            return false;
+        }
+
+        // Если фокус в таблице:
+        if (event == Event::Character('/') || event == Event::F3) {
+            search_input->TakeFocus(); // Быстрый переход в строку поиска по '/' или F3
+            return true;
+        }
+
+        if (event == Event::Return &&  !filtered_indices.empty()) {
+            size_t real_idx = filtered_indices[selected];
             // Загружаем полную запись с BLOB-фото из Firebird
-            current_details = get_employee_details(employees[selected].id);
+            current_details = get_employee_details(employees[real_idx].id);
             // Превращаем байты JPEG в холст FTXUI
             current_photo_element = render_employee_photo(current_details.photo);
 
@@ -289,7 +428,9 @@ int main() {
                 card_modal->Render(),
             });
         }
-
+        if (show_file_picker) {
+            document = dbox({document, file_picker_modal->Render()});
+        }
 #ifdef _WIN32
         // Принудительно скрываем курсор при отрисовке каждого кадра
         screen.SetCursor(Screen::Cursor{0, 0, Screen::Cursor::Hidden});
@@ -300,6 +441,7 @@ int main() {
 
     // Маршрутизируем события в карточку, если она открыта, иначе — в таблицу
     auto app = CatchEvent(root_component, [&](Event event) {
+        if (show_file_picker) return file_picker_modal->OnEvent(event);
         if (show_card) {
             return card_modal->OnEvent(event);
         }
