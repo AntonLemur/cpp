@@ -4,8 +4,6 @@
 #include <locale>
 #include <sstream>
 #include <iostream>
-#include <ncursesw/ncurses.h>
-#include <ncursesw/panel.h>
 #include <cstring>
 #include "db_utils.h"
 

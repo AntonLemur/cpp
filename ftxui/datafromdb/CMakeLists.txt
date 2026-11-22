@@ -8,30 +8,27 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Подключаем модуль для автоматической загрузки библиотеки
 include(FetchContent)
 
+# FTXUI
 FetchContent_Declare(
-  ftxui
-  GIT_REPOSITORY https://github.com/ArthurSonzogni/FTXUI.git
-  GIT_TAG v5.0.0 # Используем стабильный релиз
-  GIT_SHALLOW TRUE
+    ftxui
+    URL https://github.com/ArthurSonzogni/FTXUI/archive/refs/tags/v5.0.0.zip
 )
 
-FetchContent_MakeAvailable(ftxui)
-
-# Подключаем SDL2
+# SDL2
 set(SDL2_DISABLE_INSTALL ON CACHE BOOL "" FORCE)
-FetchContent_Declare(SDL2
-  GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
-  GIT_TAG release-2.30.8
-  GIT_SHALLOW TRUE
+
+FetchContent_Declare(
+    SDL2
+    URL https://github.com/libsdl-org/SDL/archive/refs/tags/release-2.30.8.zip
 )
 
-# Подключаем SDL2_image (отключаем лишние внешние зависимости, оставляем встроенные декодеры)
+# SDL2_image
 set(SDL2IMAGE_VENDORED OFF CACHE BOOL "" FORCE)
 set(SDL2IMAGE_SAMPLES OFF CACHE BOOL "" FORCE)
-FetchContent_Declare(SDL2_image
-  GIT_REPOSITORY https://github.com/libsdl-org/SDL_image.git
-  GIT_TAG release-2.8.2
-  GIT_SHALLOW TRUE
+
+FetchContent_Declare(
+    SDL2_image
+    URL https://github.com/libsdl-org/SDL_image/archive/refs/tags/release-2.8.2.zip
 )
 
 FetchContent_MakeAvailable(ftxui SDL2 SDL2_image)
