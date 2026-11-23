@@ -3,7 +3,6 @@
 
 #include <algorithm>
 #include <cctype>
-#include <filesystem>
 #include <fstream>
 #include <ftxui/dom/elements.hpp>
 #include <vector>
@@ -40,7 +39,7 @@ std::vector<uint8_t> read_file_bytes(const fs::path& p) {
 } // namespace
 
 ftxui::Component CreateImageFilePicker(
-    std::function<void(const std::string&)> on_select,
+    std::function<void(const std::filesystem::path&)> on_select,
     std::function<void()> on_cancel) {
     using namespace ftxui;
 
@@ -132,7 +131,7 @@ ftxui::Component CreateImageFilePicker(
         return vbox({
                    text(" Выбор фотографии сотрудника ") | bold | center,
                    separator(),
-                   text(" Путь: " + current_dir->string()) | dim,
+                   text(" Путь: " + current_dir->u8string()) | dim,
                    separator(),
                    hbox({
                        list_container->Render() | yframe | size(WIDTH, EQUAL, 38) | size(HEIGHT, EQUAL, 20),
@@ -166,7 +165,7 @@ ftxui::Component CreateImageFilePicker(
                     *current_dir = chosen.full_path;
                     load_directory();
                 } else {
-                    on_select(chosen.full_path.string());
+                    on_select(chosen.full_path);
                 }
             }
             return true;

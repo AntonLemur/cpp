@@ -10,9 +10,11 @@
 #include "photo_renderer.h"
 #include "photo_viewer.h"
 #include "file_picker.h"
+#include "cursor_streambuf.h"
 
 #include <algorithm>
 #include <cctype>
+#include <filesystem>
 #include <fstream>
 
 // Приводит строку UTF-8 (латиницу и кириллицу) к нижнему регистру для поиска
@@ -351,7 +353,7 @@ int main() {
 
     // Окно выбора фото
     auto file_picker_modal = CreateImageFilePicker(
-        [&](const std::string& chosen_path) {
+        [&](const std::filesystem::path& chosen_path) {
             std::ifstream f(chosen_path, std::ios::binary | std::ios::ate);
             if (f.is_open()) {
                 auto sz = f.tellg();
@@ -419,7 +421,26 @@ int main() {
     });
 
     // 8. Объединяем таблицу и карточку в единый интерфейс через dbox
+
+#ifdef _WIN32
+    FastWinConsoleBuf fast_buf(std::cout.rdbuf());
+    std::cout.rdbuf(&fast_buf);
+#endif
+
     auto root_component = Renderer(table_with_events, [&] {
+#ifdef _WIN32
+        // Проверяем строго те 4 поля Input, где реально нужен курсор:
+        if (show_file_picker) {
+            fast_buf.allow_cursor = false; // или true, если в file_picker есть Input в фокусе
+        } else if (show_card) {
+            fast_buf.allow_cursor = input_last_name->Focused() ||
+                                    input_first_name->Focused() ||
+                                    input_middle_name->Focused();
+        } else {
+            fast_buf.allow_cursor = search_input->Focused();
+        }
+#endif
+
         Element document = table_with_events->Render();
         if (show_card) {
             // Накладываем карточку поверх таблицы
@@ -431,13 +452,12 @@ int main() {
         if (show_file_picker) {
             document = dbox({document, file_picker_modal->Render()});
         }
-#ifdef _WIN32
-        // Принудительно скрываем курсор при отрисовке каждого кадра
-        screen.SetCursor(Screen::Cursor{0, 0, Screen::Cursor::Hidden});
-#endif
-
         return document;
     });
+
+    // auto root_component = table_with_events;
+    // root_component |= ftxui::Modal(card_modal, &show_card);
+    // root_component |= ftxui::Modal(file_picker_modal, &show_file_picker);
 
     // Маршрутизируем события в карточку, если она открыта, иначе — в таблицу
     auto app = CatchEvent(root_component, [&](Event event) {
@@ -449,6 +469,11 @@ int main() {
     });
 
     screen.Loop(app);
+
+#ifdef _WIN32
+    std::cout.rdbuf(fast_buf.orig_buf); // возвращаем при выходе
+    std::cout << "\033[?25h" << std::flush; // Возвращаем видимость курсора для cmd.exe
+#endif
 
     DBManager::disconnect();
     return 0;

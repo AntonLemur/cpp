@@ -43,6 +43,7 @@ add_executable(datafromdb main.cpp db_manager.h db_manager.cpp
   db_utils.h
   file_picker.h
   file_picker.cpp
+  cursor_streambuf.h
 )
 
 target_include_directories(datafromdb PRIVATE ${stb_SOURCE_DIR})
