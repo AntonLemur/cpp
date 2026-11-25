@@ -33,6 +33,12 @@ public:
         SetConsoleMode(hOut, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
     }
 
+    ~FastWinConsoleBuf() {
+        if (orig_buf && std::cout.rdbuf() == this) {
+            std::cout.rdbuf(orig_buf);
+        }
+    }
+
 protected:
     // Блочная запись без тормозов (вместо посимвольного overflow)
     std::streamsize xsputn(const char* s, std::streamsize n) override {

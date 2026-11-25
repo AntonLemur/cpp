@@ -1,5 +1,4 @@
 #include "employee_service.h"
-#include "db_manager.h"
 #include <codecvt>
 #include <locale>
 #include <sstream>
@@ -213,7 +212,7 @@ Employee get_employee_details(int employee_id) {
     return emp;
 }
 
-Result update_employee_name(
+Result<int> update_employee_name(
     int id,
     const std::string& last_name,
     const std::string& first_name,
@@ -221,7 +220,7 @@ Result update_employee_name(
     auto attachment = DBManager::getAttachment();
     auto master = DBManager::getMaster();
 
-    if (!attachment || !master) return {false, "No connect"};
+    if (!attachment || !master) return Result<int>{false, "No connect", 0};
 
     // Firebird::ThrowStatusWrapper status(master->getStatus());
     // Firebird::ITransaction* tra = nullptr;
@@ -280,7 +279,7 @@ Result update_employee_name(
         // meta->release();
         // stmt->release();
         // tra->release();
-        return {true,"Ok"};
+        return Result<int>{true, "Ok", 0};
 
     } catch (const Firebird::FbException& e) {
         // Извлекаем человекочитаемое сообщение об ошибке из статуса Firebird
@@ -297,16 +296,16 @@ Result update_employee_name(
         // if (meta) meta->release();
         // if (stmt) stmt->release();
 
-        return {false,err_buf};
+        return Result<int>{false, err_buf, 0};
     }
 }
 
-Result update_employee_photo(int id, const std::vector<uint8_t>& photo_bytes) {
+Result<int> update_employee_photo(int id, const std::vector<uint8_t>& photo_bytes) {
     auto attachment = DBManager::getAttachment();
     auto status_raw = DBManager::getStatus();
     auto master = DBManager::getMaster();
 
-    if (!attachment || !status_raw || !master) return {false, "No connect"};
+    if (!attachment || !status_raw || !master) return Result<int>{false, "No connect", 0};
 
     Firebird::ThrowStatusWrapper status(status_raw);
 
@@ -350,10 +349,266 @@ Result update_employee_photo(int id, const std::vector<uint8_t>& photo_bytes) {
         stmt->execute(&status, tra.get(), meta.get(), buffer.data(), nullptr, nullptr);
         tra.commit(&status);
 
-        return {true, "Ok"};
+        return Result<int>{true, "Ok", 0};
     } catch (const Firebird::FbException& e) {
         char err_buf[512] = {0};
         master->getUtilInterface()->formatStatus(err_buf, sizeof(err_buf), e.getStatus());
-        return {false, err_buf};
+        return Result<int>{false, err_buf, 0};
+    }
+}
+
+// Входной параметр для SELECT ... WHERE ID = ?
+FB_MESSAGE(EmployeeIdIn, Firebird::ThrowStatusWrapper,
+           (FB_INTEGER, id)
+);
+
+// Выходные колонки запроса SELECT для полной карточки сотрудника
+FB_MESSAGE(EmployeeCardOut, Firebird::ThrowStatusWrapper,
+           (FB_INTEGER, id)
+           (FB_BIGINT, sn)
+           (FB_INTEGER, sn_int)          // <-- INTEGER Nullable -> FB_INTEGER (не FB_BIGINT!)
+           (FB_VARCHAR(256), first_name)
+           (FB_VARCHAR(256), middle_name)
+           (FB_VARCHAR(256), last_name)
+           (FB_VARCHAR(128), car_number)
+           (FB_SMALLINT, permissions)
+           (FB_TIME, work_begin)
+           (FB_TIME, work_end)
+           (FB_INTEGER, allowed_work_5p)
+           (FB_SMALLINT, category)
+           (FB_BLOB, photo) // <-- Поле BLOB (внутри содержит ISC_QUAD)
+);
+
+Result<Employee> get_employee_details_new(int employee_id) {
+    Employee emp{};
+    Firebird::IMaster* master = DBManager::getMaster();
+    Firebird::IAttachment* att = DBManager::getAttachment();
+
+    FbStatus status(master);
+
+    if (!att || !status.get()) return Result<Employee>{false, "No connect", emp};
+
+    FbTransactionGuard tra(att->startTransaction(status.get(), 0, nullptr), master);
+    Firebird::IResultSet* rs = nullptr;
+
+    try {
+        FbTransactionGuard tra(att->startTransaction(status.get(), 0, nullptr), master);
+
+        EmployeeIdIn in(status.get(), master);
+        EmployeeCardOut out(status.get(), master);
+        in.clear();
+        out.clear();
+        in->id = employee_id;
+
+        const char* sql =
+            "SELECT ID, SN, SN_INT, FIRST_NAME, MIDDLE_NAME, LAST_NAME, "
+            "CAR_NUMBER, PERMISSIONS, WORK_BEGIN, WORK_END, "
+            "ALLOWED_WORK_5P, CATEGORY, PHOTO "
+            "FROM EMPLOYEES WHERE ID = ?";
+
+        rs = att->openCursor(status.get(), tra.get(), 0, sql, SQL_DIALECT_V6,
+                             in.getMetadata(), in.getData(),
+                             out.getMetadata(), nullptr, 0);
+
+        if (rs->fetchNext(status.get(), out.getData()) == Firebird::IStatus::RESULT_OK) {
+            emp.id = out->id;
+            if (!out->snNull) emp.sn = out->sn;
+            if (!out->sn_intNull) emp.si = out->sn_int;
+
+            // Чтение строк из FbVarChar: в выходном буфере out->first_name.str не заканчивается нулем (\0),
+            // поэтому всегда используйте конструктор с явной длиной std::string(out->first_name.str, out->first_name.length).
+            if (!out->first_nameNull)
+                emp.firstName.assign(out->first_name.str, out->first_name.length);
+            if (!out->middle_nameNull)
+                emp.middleName.assign(out->middle_name.str, out->middle_name.length);
+            if (!out->last_nameNull)
+                emp.lastName.assign(out->last_name.str, out->last_name.length);
+
+            if (!out->car_numberNull)
+                emp.carNumber = std::string(out->car_number.str, out->car_number.length);
+            if (!out->permissionsNull)
+                emp.permissions = out->permissions;
+            if (!out->work_beginNull)
+                emp.workBegin = out->work_begin.value;
+            if (!out->work_endNull)
+                emp.workEnd = out->work_end.value;
+            if (!out->allowed_work_5pNull)
+                emp.allowedWork5p = out->allowed_work_5p;
+            if (!out->categoryNull)
+                emp.category = out->category;
+
+            // Читаем BLOB (PHOTO), если он не NULL
+            if (!out->photoNull) {
+
+
+                // ISC_QUAD* blobId = reinterpret_cast<ISC_QUAD*>(buffer.data() + meta->getOffset(&wrappedStatus, 6));
+                // Firebird::IBlob* blob = att->openBlob(&wrappedStatus, tra, blobId, 0, nullptr);
+
+                // std::vector<uint8_t> segmentBuffer(32767);
+                // unsigned int bytesRead = 0;
+                // int fetchResult;
+                // while ((fetchResult = blob->getSegment(&wrappedStatus, segmentBuffer.size(), segmentBuffer.data(), &bytesRead)) == Firebird::IStatus::RESULT_OK || status->getState() == 0) {
+                //     if (bytesRead > 0) emp.photo.insert(emp.photo.end(), segmentBuffer.begin(), segmentBuffer.begin() + bytesRead);
+                //     if (fetchResult != Firebird::IStatus::RESULT_OK) break;
+                // }
+                // blob->close(&wrappedStatus);
+
+
+                emp.hasPhoto = true;
+                FbPtr<Firebird::IBlob> blob(
+                    att->openBlob(status.get(), tra.get(), &out->photo, 0, nullptr));
+                try {
+                    uint8_t chunk[32767];
+                    unsigned int bytesRead = 0;
+                    while (true) {
+                        int res = blob->getSegment(status.get(), sizeof(chunk), chunk, &bytesRead);
+                        if (res == Firebird::IStatus::RESULT_OK || res == Firebird::IStatus::RESULT_SEGMENT) {
+                            emp.photo.insert(emp.photo.end(), chunk, chunk + bytesRead);
+                        } else {
+                            break; // RESULT_NO_DATA — достигнут конец BLOB
+                        }
+                    }
+                    blob->close(status.get());
+                } catch (const Firebird::FbException& e) {
+                    char err_buf[512] = {0};
+                    master->getUtilInterface()->formatStatus(err_buf, sizeof(err_buf), e.getStatus());
+                    return Result<Employee>{false, err_buf, emp};
+                }
+            }
+        }
+
+        rs->close(status.get());
+        rs = nullptr;
+        tra.commit(status.get());
+    } catch (const Firebird::FbException& e) {
+        if (rs) rs->release();
+        char err_buf[512] = {0};
+        master->getUtilInterface()->formatStatus(err_buf, sizeof(err_buf), e.getStatus());
+        return Result<Employee>{false, err_buf, emp};
+    }
+
+    return Result<Employee>{true, "Ok", emp};
+}
+
+// Описываем входные параметры строго в порядке их объявления в процедуре
+FB_MESSAGE(EmployeeIn, Firebird::ThrowStatusWrapper,
+           (FB_INTEGER, id)
+           (FB_BIGINT, sn)
+           (FB_VARCHAR(256), first_name)     // Лучше сразу 256 (64 * 4 байта для UTF-8)
+           (FB_VARCHAR(256), middle_name)
+           (FB_VARCHAR(256), last_name)
+           (FB_VARCHAR(128), car_number)     // 32 * 4 байта
+           (FB_SMALLINT, permissions)
+           (FB_TIME, work_begin)
+           (FB_TIME, work_end)
+           (FB_INTEGER, allowed_work_5p)
+           (FB_SMALLINT, category)
+);
+
+// Описываем выходной параметр
+FB_MESSAGE(EmployeeOut, Firebird::ThrowStatusWrapper,
+           (FB_INTEGER, r_id)
+);
+
+Result<int> update_employee(const Employee& emp) {
+
+    auto att = DBManager::getAttachment();
+    auto master = DBManager::getMaster();
+
+    if (!att || !master) return Result<int>{false, "No connect", 0};
+
+    FbStatus status(master);
+    // IUtil* util = master->getUtilInterface();
+
+    try {
+        // tra = attachment->startTransaction(&status, 0, nullptr);
+        // Транзакция сама сделает rollback и release, если вылетит исключение до commit()
+        FbTransactionGuard tra(att->startTransaction(status.get(), 0, nullptr), master);
+
+        // Создаем экземпляры сообщений (они сами выделяют буфер и строят метаданные)
+        EmployeeIn in(status.get(), master);
+        EmployeeOut out(status.get(), master);
+
+        // Очищаем буферы (обнуляет флаги NULL)
+        in.clear();
+        out.clear();
+
+        // ID (0 = INSERT, >0 = UPDATE)
+        in->id = emp.id;
+
+        // SN (BIGINT)
+        if (emp.sn.has_value()) {
+            in->sn = *emp.sn;
+            in->snNull = FB_FALSE;
+        } else {
+            in->snNull = FB_TRUE;
+        }
+
+        // ФИО
+        in->first_name.set(emp.firstName.c_str());
+        in->middle_name.set(emp.middleName.c_str());
+        in->last_name.set(emp.lastName.c_str());
+
+        // Номер машины
+        if (emp.carNumber.has_value()) {
+            in->car_number.set(emp.carNumber->c_str());
+            in->car_numberNull = FB_FALSE;
+        } else {
+            in->car_numberNull = FB_TRUE;
+        }
+
+        // Права (SMALLINT)
+        if (emp.permissions.has_value()) {
+            in->permissions = *emp.permissions;
+            in->permissionsNull = FB_FALSE;
+        } else {
+            in->permissionsNull = FB_TRUE;
+        }
+
+        // Время начала и конца смены (TIME)
+        if (emp.workBegin.has_value()) {
+            in->work_begin.value = *emp.workBegin;
+            in->work_beginNull = FB_FALSE;
+        } else {
+            in->work_beginNull = FB_TRUE;
+        }
+
+        if (emp.workEnd.has_value()) {
+            in->work_end.value = *emp.workEnd;
+            in->work_endNull = FB_FALSE;
+        } else {
+            in->work_endNull = FB_TRUE;
+        }
+
+        // Разрешение работы 5п
+        in->allowed_work_5p = emp.allowedWork5p;
+
+        // Категория
+        if (emp.category.has_value()) {
+            in->category = *emp.category;
+            in->categoryNull = FB_FALSE;
+        } else {
+            in->categoryNull = FB_TRUE;
+        }
+
+        // Выполняем процедуру (11 входных параметров)
+        att->execute(status.get(), tra.get(), 0,
+            "EXECUTE PROCEDURE M_EMPLOYEES_IU(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            SQL_DIALECT_V6,
+            in.getMetadata(), in.getData(),
+            out.getMetadata(), out.getData());
+        tra.commit(status.get());
+        if (out->r_idNull == FB_TRUE) { // или просто if (out->r_idNull)
+            // Процедура вернула NULL
+            return Result<int>{false, "The M_EMPLOYEES_IU procedure returned NULL", 0};
+        } else {
+            int newId = out->r_id;
+            return Result<int>{true, "Ok", newId};
+        }
+    } catch (const Firebird::FbException& e) {
+        // Извлекаем человекочитаемое сообщение об ошибке из статуса Firebird
+        char err_buf[512];
+        master->getUtilInterface()->formatStatus(err_buf, sizeof(err_buf), e.getStatus());
+        return Result<int>{false, err_buf, 0};
     }
 }

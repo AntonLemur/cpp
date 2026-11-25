@@ -81,7 +81,7 @@ int main() {
         for (size_t i = 0; i < employees.size(); ++i) {
             const auto& emp = employees[i];
             std::string full_name = emp.lastName + " " + emp.firstName + " " + emp.middleName;
-            std::string sn_str = std::to_string(emp.sn);
+            std::string sn_str = optToString(emp.sn);
 
             // Проверяем совпадение по ФИО (без учёта регистра) или по табельному номеру
             bool match = q_lower.empty() ||
@@ -98,7 +98,7 @@ int main() {
                     auto line = hbox({
                         text(std::to_string(item.id)) | size(WIDTH, EQUAL, 6),
                         separator(),
-                        text(std::to_string(item.sn)) | size(WIDTH, EQUAL, 14),
+                        text(optToString(item.sn)) | size(WIDTH, EQUAL, 14),
                         separator(),
                         text(item_name) | flex,
                         separator(),
@@ -185,6 +185,7 @@ int main() {
     auto screen = ScreenInteractive::Fullscreen();
 
     bool show_card = false;
+    bool new_record = false;
     Employee current_details{};
     Element current_photo_element;
 
@@ -198,8 +199,15 @@ int main() {
     InputOption input_opt;
     input_opt.multiline = false; // Запрещаем перенос строки по Enter
     input_opt.transform = [](InputState state) {
+// Шпаргалка по цветам для TERM=linux в FTXUI
+// Чтобы артефакты гарантированно не появлялись в голом Linux TTY, в color(...) для текста используйте только те константы,
+// которые FTXUI переводит в коды 30–37 без флага bright:
+//     Безопасные (без артефактов): Color::Black, Color::Red, Color::Green, Color::Yellow, Color::Blue, Color::Magenta, Color::Cyan.
+//     Вызывают залипание яркости в TERM=linux: Color::White (97), Color::GrayDark (90), а также все *Light (Color::YellowLight, Color::CyanLight и т.д.).
+// (Примечание: для bgcolor(...) фон в VGA физически не имеет бита яркости, поэтому bgcolor(Color::GrayLight)
+// в ветке else работает безопасно и отображается как обычный светло-серый фон \033[47m).
         if (state.focused) {
-            state.element |= bgcolor(Color::Blue) | color(Color::White);
+            state.element |= bgcolor(Color::Blue) | color(Color::Yellow);
         } else {
             state.element |= bgcolor(Color::GrayLight) | color(Color::Black);
         }
@@ -222,30 +230,48 @@ int main() {
 
     auto btn_save = Button(" [ Сохранить ] ", [&] {
         // Распаковка полей (фича C++17)
-        auto [ok, error] = update_employee_name(current_details.id, edit_last_name, edit_first_name, edit_middle_name);
+        auto [ok, error, value] = update_employee_name(current_details.id, edit_last_name, edit_first_name, edit_middle_name);
         if (ok) {
-            // Обновляем данные в открытой карточке и в списке таблицы на экране
-            current_details.lastName = edit_last_name;
-            current_details.firstName = edit_first_name;
-            current_details.middleName = edit_middle_name;
-
-            size_t real_idx = filtered_indices[selected];
-            employees[real_idx].lastName = edit_last_name;
-            employees[real_idx].firstName = edit_first_name;
-            employees[real_idx].middleName = edit_middle_name;
-            if (photo_changed)
+            if(new_record)
             {
-                update_employee_photo(current_details.id, current_details.photo);
-                employees[real_idx].hasPhoto = current_details.hasPhoto;
+                size_t real_idx = employees.size()-1;
+                employees[real_idx].lastName = edit_last_name;
+                employees[real_idx].firstName = edit_first_name;
+                employees[real_idx].middleName = edit_middle_name;
+                if (photo_changed)
+                {
+                    update_employee_photo(employees[real_idx].id, employees[real_idx].photo);
+                    employees[real_idx].hasPhoto = true;
+                }
+                show_card = false;
+                current_details.photo.clear();
             }
-            show_card = false;
-            current_details.photo.clear();
+            else{
+                // Обновляем данные в открытой карточке и в списке таблицы на экране
+                current_details.lastName = edit_last_name;
+                current_details.firstName = edit_first_name;
+                current_details.middleName = edit_middle_name;
+
+                size_t real_idx = filtered_indices[selected];
+                employees[real_idx].lastName = edit_last_name;
+                employees[real_idx].firstName = edit_first_name;
+                employees[real_idx].middleName = edit_middle_name;
+                if (photo_changed)
+                {
+                    update_employee_photo(current_details.id, current_details.photo);
+                    employees[real_idx].hasPhoto = current_details.hasPhoto;
+                }
+                show_card = false;
+                current_details.photo.clear();
+            }
         } else {
             status_message = error;
         }
     },btn_opt);
 
     auto btn_cancel = Button(" [ Отмена ] ", [&] {
+        if(new_record)
+            employees.pop_back();
         show_card = false;
         current_details.photo.clear();
     },btn_opt);
@@ -266,7 +292,7 @@ int main() {
     auto card_component = Renderer(card_form_container, [&] {
         auto info_block = vbox({
                                 hbox({text(" ID:           ") | dim, text(std::to_string(current_details.id)) | bold}),
-                                hbox({text(" Таб. номер:   ") | dim, text(std::to_string(current_details.sn))}),
+                                hbox({text(" Таб. номер:   ") | dim, text(optToString(current_details.sn))}),
                                 hbox({text(" Внутр. код:   ") | dim, text(std::to_string(current_details.si))}),
                                 separator(),
                                 hbox({text(" Фамилия:      ") | dim, input_last_name->Render() | flex}),
@@ -283,7 +309,7 @@ int main() {
                    text(" Карточка сотрудника (редактирование) ") | bold | center,
                    separator(),
                    hbox({
-                       current_photo_element,
+                       current_photo_element ? current_photo_element : text(""),
                        separator(),
                        info_block,
                    }),
@@ -346,6 +372,15 @@ int main() {
             return true;
         }
 
+        if (event == Event::ArrowRight && btn_cancel->Focused()) {
+            btn_change_photo->TakeFocus();
+            return true;
+        }
+        if (event == Event::ArrowLeft && btn_change_photo->Focused()) {
+            btn_cancel->TakeFocus();
+            return true;
+        }
+
         // Все остальные клавиши передаём напрямую в контейнер формы
         card_form_container->OnEvent(event);
         return true; // Всегда поглощаем любые события, пока открыта карточка!
@@ -371,6 +406,8 @@ int main() {
 
     // 3. Обработка нажатия Enter в таблице: запрашиваем БД и строим картинку один раз
     auto table_with_events = CatchEvent(layout, [&](Event event) {
+        const auto AltReturn = Event::Special({27, 10}); // или Event::Special("\x1B\n")
+
         // Если фокус сейчас в строке поиска:
         if (search_input->Focused()) {
             if (event == Event::Escape) {
@@ -400,19 +437,40 @@ int main() {
         if (event == Event::Return &&  !filtered_indices.empty()) {
             size_t real_idx = filtered_indices[selected];
             // Загружаем полную запись с BLOB-фото из Firebird
-            current_details = get_employee_details(employees[real_idx].id);
-            // Превращаем байты JPEG в холст FTXUI
-            current_photo_element = render_employee_photo(current_details.photo);
+            auto [ok, error, value] = get_employee_details_new(employees[real_idx].id);
+            if(ok)
+            {
+                current_details = std::move(value); //get_employee_details_new(employees[real_idx].id);
+                // Превращаем байты JPEG в холст FTXUI
+                current_photo_element = render_employee_photo(current_details.photo);
 
-            edit_last_name = current_details.lastName;
-            edit_first_name = current_details.firstName;
-            edit_middle_name = current_details.middleName;
-            status_message.clear();
-            input_last_name->TakeFocus();
+                edit_last_name = current_details.lastName;
+                edit_first_name = current_details.firstName;
+                edit_middle_name = current_details.middleName;
+                status_message.clear();
+                input_last_name->TakeFocus();
 
-            show_card = true;
+                photo_changed = false;
+                show_card = true;
+            } else {
+                current_details = std::move(value);
+                current_photo_element = render_employee_photo({}); // Или text("Нет фото") | center
+                status_message=error;
+                show_card = true;
+            }
             return true;
         }
+        if (event == AltReturn) {
+            new_record = true;
+            Employee emp;
+            edit_last_name = emp.lastName;
+            edit_first_name = emp.firstName;
+            edit_middle_name = emp.middleName;
+
+
+            return true;
+        }
+
         if (event == Event::Character('q') || event == Event::Escape) {
             screen.Exit();
             return true;
@@ -477,4 +535,5 @@ int main() {
 
     DBManager::disconnect();
     return 0;
+
 }
